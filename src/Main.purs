@@ -5,38 +5,53 @@ import Prelude
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE, log)
 import Data.Foldable (foldl)
-import Data.Maybe (Maybe(..))
 import Data.Record as Record
-import Data.Variant (Variant, inj, prj)
-import Type.Prelude (class IsSymbol, class RowToList, RLProxy(..), SProxy(..))
+import Data.Record.Builder (Builder)
+import Data.Record.Builder as Builder
+import Data.Variant (class VariantMatchCases, Variant, inj, match)
+import Type.Prelude (class IsSymbol, class RowLacks, class RowToList, RLProxy(..), SProxy(..))
 import Type.Row (Cons, Nil, kind RowList)
 
 vrUpdate
-  :: forall row rl
+  :: forall row rl matches ml
    . RowToList row rl
-  => VariantRecordUpdate rl row
+  => RowToList matches ml
+  => VariantRecordMatch rl row () matches
+  => VariantMatchCases ml row ({ | row } -> { | row })
+  => Union row () row
   => Variant row
   -> { | row }
   -> { | row }
-vrUpdate = vrUpdateImpl (RLProxy :: RLProxy rl)
+vrUpdate v = match matches v
+  where
+    matches :: { | matches }
+    matches = Builder.build (vrRecordMatchImpl (RLProxy :: RLProxy rl)) {}
 
-class VariantRecordUpdate (rl :: RowList) (r :: # Type) | rl -> r where
-  vrUpdateImpl :: RLProxy rl -> Variant r -> { | r } -> { | r }
+class VariantRecordMatch (rl :: RowList) (row :: # Type) (i :: # Type) (o :: # Type)
+  | rl -> row i o where
+  vrRecordMatchImpl :: RLProxy rl -> Builder { | i } { | o }
 
-instance nilVRU :: VariantRecordUpdate Nil row where
-  vrUpdateImpl _ _ r = r
+instance nilVRU :: VariantRecordMatch Nil row () () where
+  vrRecordMatchImpl _ = id
 
 instance consVRU ::
   ( IsSymbol name
+  , VariantRecordMatch tail row from from'
   , RowCons name ty row' row
-  , VariantRecordUpdate tail row
-  ) => VariantRecordUpdate (Cons name ty tail) row where
-  vrUpdateImpl _ v r =
-    case prj nameP v of
-      Just a -> Record.set nameP a r
-      Nothing -> vrUpdateImpl (RLProxy :: RLProxy tail) v r
-    where
+  , RowCons name (ty -> { | row } -> { | row }) from' to
+  , RowLacks name from'
+  ) => VariantRecordMatch (Cons name ty tail) row from to where
+  vrRecordMatchImpl _ =
+    let
       nameP = SProxy :: SProxy name
+      update :: ty -> { | row } -> { | row }
+      update x r = Record.set nameP x r
+      first :: Builder { | from' } { | to }
+      first = Builder.insert nameP update
+      rest :: Builder { | from } { | from' }
+      rest = vrRecordMatchImpl (RLProxy :: RLProxy tail)
+    in
+      first <<< rest
 
 type MyRecordFields =
   ( apple :: Int
