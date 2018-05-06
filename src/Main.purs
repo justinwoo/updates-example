@@ -6,52 +6,35 @@ import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE, log)
 import Data.Foldable (foldl)
 import Data.Record as Record
-import Data.Record.Builder (Builder)
-import Data.Record.Builder as Builder
-import Data.Variant (class VariantMatchCases, Variant, inj, match)
-import Type.Prelude (class IsSymbol, class RowLacks, class RowToList, RLProxy(..), SProxy(..))
+import Data.Variant (Variant, case_, inj, on)
+import Type.Prelude (class IsSymbol, class RowToList, RLProxy(RLProxy), SProxy(SProxy))
 import Type.Row (Cons, Nil, kind RowList)
 
-vrUpdate
-  :: forall row rl matches ml
-   . RowToList row rl
-  => RowToList matches ml
-  => VariantRecordMatch rl row () matches
-  => VariantMatchCases ml row ({ | row } -> { | row })
-  => Union row () row
-  => Variant row
-  -> { | row }
-  -> { | row }
-vrUpdate v = match matches v
-  where
-    matches :: { | matches }
-    matches = Builder.build (vrRecordMatchImpl (RLProxy :: RLProxy rl)) {}
+-- by monoidmusician: https://purescript-users.ml/t/generating-lenses-from-variants/54/7
+class RecordVariantUpdate r where
+  vrUpdate :: Variant r -> Record r -> Record r
 
-class VariantRecordMatch (rl :: RowList) (row :: # Type) (i :: # Type) (o :: # Type)
-  | rl -> row i o where
-  vrRecordMatchImpl :: RLProxy rl -> Builder { | i } { | o }
+instance recordVariantUpdate ::
+  ( RowToList r rl
+  , RecordVariantUpdateRL rl r r
+  ) => RecordVariantUpdate r where
+    vrUpdate = rvUpdateRL (RLProxy :: RLProxy rl)
 
-instance nilVRU :: VariantRecordMatch Nil row () () where
-  vrRecordMatchImpl _ = id
+class RecordVariantUpdateRL rl v r | rl -> v where
+  rvUpdateRL :: RLProxy rl -> Variant v -> Record r -> Record r
 
-instance consVRU ::
-  ( IsSymbol name
-  , VariantRecordMatch tail row from from'
-  , RowCons name ty row' row
-  , RowCons name (ty -> { | row } -> { | row }) from' to
-  , RowLacks name from'
-  ) => VariantRecordMatch (Cons name ty tail) row from to where
-  vrRecordMatchImpl _ =
-    let
-      nameP = SProxy :: SProxy name
-      update :: ty -> { | row } -> { | row }
-      update x r = Record.set nameP x r
-      first :: Builder { | from' } { | to }
-      first = Builder.insert nameP update
-      rest :: Builder { | from } { | from' }
-      rest = vrRecordMatchImpl (RLProxy :: RLProxy tail)
-    in
-      first <<< rest
+instance rvUpdateNil :: RecordVariantUpdateRL Nil () r where
+  rvUpdateRL _ = case_
+
+instance rvUpdateCons ::
+  ( IsSymbol s
+  , RecordVariantUpdateRL rl v r
+  , RowCons s t r' r
+  , RowCons s t v v'
+  ) => RecordVariantUpdateRL (Cons s t rl) v' r where
+    rvUpdateRL _ =
+      let s = SProxy :: SProxy s
+      in on s (Record.set s) (rvUpdateRL (RLProxy :: RLProxy rl))
 
 type MyRecordFields =
   ( apple :: Int
